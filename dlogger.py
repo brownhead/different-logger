@@ -7,14 +7,22 @@ import string
 import re
 
 
-def style_text(classnames, text, base_classnames="default"):
-    ansi = lambda values: u"\x1B[" + u";".join(unicode(i) for i in values) + u"m"
-    STYLES = {
-        "default": [0],
+class DifferentFormatter(object):
+    class _ColoredStringFormatter(string.Formatter):
+        def __init__(self, colorizer):
+            self.colorizer = colorizer
+
+        def convert_field(self, value, conversion):
+            converted = string.Formatter.convert_field(self, value, conversion)
+            return self.colorizer(converted)
+
+    DEFAULT_STYLESHEET = {
+        "default": [],
+        "critical": [1, 31],  # bold red
         "error": [31],  # red
         "warning": [33],  # yellow
-        "info": [0],  # default
-        "debug": [0, 2],  # faint default
+        "info": [],  # default
+        "debug": [2],  # faint
         "argument": [34],  # blue
         "ignored_tb": [2],  # faint
         "tb_path": [34],  # blue
@@ -22,35 +30,30 @@ def style_text(classnames, text, base_classnames="default"):
         "tb_exc_name": [31],  # red
     }
 
-    values = []
-    for i in classnames.split():
-        values += STYLES[i.lower()]
+    def __init__(self, stylesheet=None):
+        self.stylesheet = self.DEFAULT_STYLESHEET.copy()
+        self.stylesheet.expand(stylesheet)
 
-    base_values = []
-    for i in base_classnames.split():
-        base_values += STYLES[i.lower()]
+    @staticmethod
+    def style_text(stylesheet, styles, base_styles, text):
+        # Form up the sequences we'll use to color the text.
+        ansify = lambda codes: u"\x1B[" + u";".join(map(str, [0] + codes)) + u"m"
+        prefix = ansify(sum(stylesheet[i] for i in styles, []))
+        postfix = ansify(sum(stylesheet[i] for i in base_styles, []))
 
-    return ansi(values) + text + ansi(base_values)
+        return prefix + text + postfix
 
-
-class ColoredStringFormatter(string.Formatter):
-    def __init__(self, base_classnames):
-        self.base_classnames = base_classnames
-
-    def convert_field(self, value, conversion):
-        result = string.Formatter.convert_field(self, value, conversion)
-        return style_text("argument", result, base_classnames=self.base_classnames)
-
-
-class LogFormatter(object):
     def format(self, record):
         shortname = record.name
         if shortname.startswith("phial."):
             shortname = shortname[len("phial"):]
 
-        message = ColoredStringFormatter(record.levelname).format(record.msg, *record.args)
+        formatter = ColoredStringFormatter(
+            lambda arg: self.style_text(self.stylesheet, ["argument"], [], arg))
+        message = formatter.format(record.msg, *record.args)
 
-        formatted = u"[{0}] {1}".format(shortname, message)
+        formatted = u"[{record.name}:{record.lineno}] {message}".format(record=record,
+                                                                        message=message)
         formatted = style_text(record.levelname, formatted)
 
         tb = self.format_traceback(record)
