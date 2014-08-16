@@ -32,14 +32,15 @@ class DifferentFormatter(object):
 
     def __init__(self, stylesheet=None):
         self.stylesheet = self.DEFAULT_STYLESHEET.copy()
-        self.stylesheet.expand(stylesheet)
+        if stylesheet is not None:
+            self.stylesheet.update(stylesheet)
 
     @staticmethod
     def style_text(stylesheet, styles, base_styles, text):
         # Form up the sequences we'll use to color the text.
         ansify = lambda codes: u"\x1B[" + u";".join(map(str, [0] + codes)) + u"m"
-        prefix = ansify(sum(stylesheet[i] for i in styles, []))
-        postfix = ansify(sum(stylesheet[i] for i in base_styles, []))
+        prefix = ansify(sum([stylesheet[i] for i in base_styles + styles], []))
+        postfix = ansify(sum([stylesheet[i] for i in base_styles], []))
 
         return prefix + text + postfix
 
@@ -48,19 +49,20 @@ class DifferentFormatter(object):
         if shortname.startswith("phial."):
             shortname = shortname[len("phial"):]
 
-        formatter = ColoredStringFormatter(
-            lambda arg: self.style_text(self.stylesheet, ["argument"], [], arg))
+        formatter = self._ColoredStringFormatter(
+            lambda arg: self.style_text(self.stylesheet, ["argument"], [record.levelname.lower()],
+                                        arg))
         message = formatter.format(record.msg, *record.args)
 
         formatted = u"[{record.name}:{record.lineno}] {message}".format(record=record,
                                                                         message=message)
-        formatted = style_text(record.levelname, formatted)
+        formatted = self.style_text(self.stylesheet, [record.levelname.lower()], [], formatted)
 
         tb = self.format_traceback(record)
         if tb:
             formatted += u"\n" + tb
 
-        return style_text(record.levelname, formatted)
+        return formatted
 
     @staticmethod
     def indent_text(text):
@@ -80,29 +82,30 @@ class DifferentFormatter(object):
                                   file=dummy_file)
         tb = dummy_file.getvalue().strip()
 
-        classnames = record.levelname
+        classnames = [record.levelname.lower()]
         if getattr(record, "exc_ignored", False):
-            classnames += " ignored_tb"
+            classnames.append("ignored_tb")
 
         tb = self.highlight_tb(tb, classnames)
 
         tb = self.indent_text(tb)
 
-        return style_text(classnames, tb)
+        return self.style_text(self.stylesheet, classnames, [], tb)
 
-    @staticmethod
-    def highlight_tb(tb, base_classnames):
-        FILE_LINE_RE = re.compile(r'^  File (".+"), line ([0-9]+), in (.*)$', re.MULTILINE | re.UNICODE)
+    def highlight_tb(self, tb, base_classnames):
+        FILE_LINE_RE = re.compile(r'^  File (".+"), line ([0-9]+), in (.*)$',
+                                  re.MULTILINE | re.UNICODE)
         def repl_file_line(match):
             return '  File {0}, line {1}, in {2}'.format(
-                style_text("tb_path", match.group(1), base_classnames),
-                style_text("tb_lineno", match.group(2), base_classnames),
+                self.style_text(self.stylesheet, ["tb_path"], base_classnames, match.group(1)),
+                self.style_text(self.stylesheet, ["tb_lineno"], base_classnames, match.group(2)),
                 match.group(3)
             )
 
         FOOTER_LINE_RE = re.compile(r"^(\w+)(.*)$", re.MULTILINE | re.UNICODE)
         def repl_footer_line(match):
-            return style_text("tb_exc_name", match.group(1), base_classnames) + match.group(2)
+            return self.style_text(self.stylesheet, ["tb_exc_name"], base_classnames, 
+                                   match.group(1)) + match.group(2)
 
         lines = tb.split("\n")
         if len(lines) < 2:
