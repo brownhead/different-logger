@@ -9,12 +9,35 @@ import re
 
 class DifferentFormatter(object):
     class _ColoredStringFormatter(string.Formatter):
+        ZERO_LENGTH_RE = re.compile(r"(?P<open_braces>{+)}")
+
         def __init__(self, colorizer):
             self.colorizer = colorizer
+            self.count = 0
 
         def convert_field(self, value, conversion):
             converted = string.Formatter.convert_field(self, value, conversion)
             return self.colorizer(converted)
+
+        def parse(self, format_string):
+            # This is a list so I can access it inside the function
+            count = [0]
+
+            def repl(match):
+                # If there is an odd number of open braces, then we know this is a zero-length
+                # field.
+                if len(match.group("open_braces")) % 2 == 1:
+                    r = match.group("open_braces") + str(count[0]) + "}"
+                    count[0] += 1
+                    return r
+                else:
+                    return match.group(0)
+
+            # Replace any zero length field with a numbered field as appropriate than pass it off
+            # to the parser.
+            converted = self.ZERO_LENGTH_RE.sub(repl, format_string)
+            return string.Formatter.parse(self, converted)
+
 
     DEFAULT_STYLESHEET = {
         "default": [],
