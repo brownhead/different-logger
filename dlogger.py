@@ -141,7 +141,7 @@ class DifferentFormatter(object):
         return tb
 
 
-class LoggedDeath(Exception):
+class FatalError(SystemExit, Exception):
     pass
 
 
@@ -149,9 +149,9 @@ class Logger(object):
     def __init__(self, logger):
         self.logger = logger
 
-    def die(self, msg, *args, **kwargs):
+    def fatal(self, msg, *args, **kwargs):
         self.logger.error(msg, *args, **kwargs)
-        raise LoggedDeath()
+        raise FatalError()
 
     def log(self, lvl, msg, *args, **kwargs):
         extra = kwargs.pop("extra", {})
