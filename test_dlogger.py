@@ -25,6 +25,8 @@ def main():
         except RuntimeError:
             logger.log(getattr(logging, i), "This is a {} exception message", i, exc_info=True)
 
+    logger.fatal("Goodbye!")
+
 
 if __name__ == "__main__":
     main()
