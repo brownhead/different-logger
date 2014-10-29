@@ -17,13 +17,13 @@ def main():
 
     levels = ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]
     for i in levels:
-        logger.log(getattr(logging, i), "This is a {} message.", i)
+        logger.log(getattr(logging, i), "This is a %s message.", i)
 
     for i in levels:
         try:
             raise RuntimeError("This is a description of the exception.")
         except RuntimeError:
-            logger.log(getattr(logging, i), "This is a {} exception message", i, exc_info=True)
+            logger.log(getattr(logging, i), "This is a %s exception message", i, exc_info=True)
 
     logger.fatal("Goodbye!")
 

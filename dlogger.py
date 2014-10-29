@@ -6,39 +6,98 @@ import logging
 import string
 import re
 
+class ColoredFormatter(string.Formatter):
+    """Same as string.Formatter but ensures all replacements are colored.
+
+    This also backports the zero-length field feature of Python 2.7 to Python
+    2.6, so "Hello {} world!" will always be a valid format string.
+
+    All replacements are sent through whatever function you provide as the
+    `colorizer`. So if you formatted the string "Hello {} world!" with the
+    value 2, and `colorizer` was set to a function that always returned the
+    string "walnut", the result would be "Hello walnut world!".
+    """
+
+    # Matches zero length fields (fields with no name, ie: {})
+    ZERO_LENGTH_RE = re.compile(r"(?P<open_braces>{+)}")
+
+    def __init__(self, colorizer):
+        self.colorizer = colorizer
+
+    def convert_field(self, value, conversion):
+        """Does any conversion required to render the field.
+
+        This function is called to figure out what to replace a field with. For
+        example, if the formatter is replacing {0} with 2, it will call this
+        function with value set to 2, and conversion set to None, and will
+        replace {0} with whatever we return. If the formatter is replacing
+        {0!s} instead, conversion will be "s".
+        """
+        converted = string.Formatter.convert_field(self, value, conversion)
+        return self.colorizer(converted)
+
+    def parse(self, format_string):
+        """Parses the format string into a useful iterable.
+
+        The actual behavior of this function isn't super important. What's
+        important is that it's called in order to parse the format string, so
+        if we want to change the format string this is the time to do it. Here
+        is where we take care of zero length strings.
+        """
+        # Scope hack to make a variable modifiable inside the below
+        # function.
+        count = [0]
+
+        def repl(match):
+            # If there is an odd number of open braces, then we know this is a
+            # zero-length field. This is necessary because the way to escape an
+            # open brace is by preceding it with an open brace. So {{{{}} does
+            # not contain a zero length field and is instead rendered as two
+            # open braces followed by a closing brace.
+            if len(match.group("open_braces")) % 2 == 1:
+                r = match.group("open_braces") + str(count[0]) + "}"
+                count[0] += 1
+                return r
+            else:
+                return match.group(0)
+
+        # Replace any zero length field with a numbered field as appropriate
+        # than pass it off to the parser.
+        converted = self.ZERO_LENGTH_RE.sub(repl, format_string)
+        return string.Formatter.parse(self, converted)
+
+
+class ColoredPercentFormatter(object):
+    """Same as ColoredFormatter but accepts percent style strings.
+
+    Example of a percent style string: "George is a %s bear."
+    """
+
+    # This is a regular expression that should only capture valid fields in a
+    # percent style string.
+    FIELD_RE = re.compile(
+        r"%"
+        r"(\((?P<mapping_key>[^)]+)\))?"
+        r"(?P<conversion_flags>[#0 +-]+)?"
+        r"(?P<minimum_field_width>[0-9*]+)?"
+        r"(?P<precision>\.[0-9*]+)?"
+        r"(?P<length_modifier>[hlL])?"
+        r"(?P<conversion_type>[diouxXeEfFgGcrs%])")
+
+    def __init__(self, colorizer):
+        self.colorizer = colorizer
+
+    def _colorize_match(self, match):
+        if match.group("conversion_type") == "%":
+            return match.group(0)
+        else:
+            return self.colorizer(match.group(0))
+
+    def format(self, format_string, *args, **kwargs):
+        return self.FIELD_RE.sub(self._colorize_match, format_string) % (args or kwargs)
+
 
 class DifferentFormatter(object):
-    class _ColoredStringFormatter(string.Formatter):
-        ZERO_LENGTH_RE = re.compile(r"(?P<open_braces>{+)}")
-
-        def __init__(self, colorizer):
-            self.colorizer = colorizer
-            self.count = 0
-
-        def convert_field(self, value, conversion):
-            converted = string.Formatter.convert_field(self, value, conversion)
-            return self.colorizer(converted)
-
-        def parse(self, format_string):
-            # This is a list so I can access it inside the function
-            count = [0]
-
-            def repl(match):
-                # If there is an odd number of open braces, then we know this is a zero-length
-                # field.
-                if len(match.group("open_braces")) % 2 == 1:
-                    r = match.group("open_braces") + str(count[0]) + "}"
-                    count[0] += 1
-                    return r
-                else:
-                    return match.group(0)
-
-            # Replace any zero length field with a numbered field as appropriate than pass it off
-            # to the parser.
-            converted = self.ZERO_LENGTH_RE.sub(repl, format_string)
-            return string.Formatter.parse(self, converted)
-
-
     DEFAULT_STYLESHEET = {
         "default": [],
         "critical": [1, 31],  # bold red
@@ -53,10 +112,11 @@ class DifferentFormatter(object):
         "tb_exc_name": [31],  # red
     }
 
-    def __init__(self, stylesheet=None):
+    def __init__(self, stylesheet=None, formatter=ColoredPercentFormatter):
         self.stylesheet = self.DEFAULT_STYLESHEET.copy()
         if stylesheet is not None:
             self.stylesheet.update(stylesheet)
+        self.formatter = formatter
 
     @staticmethod
     def style_text(stylesheet, styles, base_styles, text):
@@ -72,7 +132,7 @@ class DifferentFormatter(object):
         if shortname.startswith("phial."):
             shortname = shortname[len("phial"):]
 
-        formatter = self._ColoredStringFormatter(
+        formatter = self.formatter(
             lambda arg: self.style_text(self.stylesheet, ["argument"], [record.levelname.lower()],
                                         arg))
         message = formatter.format(record.msg, *record.args)
