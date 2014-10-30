@@ -5,6 +5,7 @@ import sys
 import logging
 import string
 import re
+import time
 
 class ColoredFormatter(string.Formatter):
     """Same as string.Formatter but ensures all replacements are colored.
@@ -112,11 +113,20 @@ class DifferentFormatter(object):
         "tb_exc_name": [31],  # red
     }
 
-    def __init__(self, stylesheet=None, formatter=ColoredPercentFormatter):
+    def __init__(self, format_string=None, stylesheet=None, percent_mode=False):
         self.stylesheet = self.DEFAULT_STYLESHEET.copy()
         if stylesheet is not None:
             self.stylesheet.update(stylesheet)
-        self.formatter = formatter
+
+        self.percent_mode = percent_mode
+        if self.percent_mode:
+            self.formatter = ColoredPercentFormatter
+            self.format_string = (
+                u"%(levelname)-8s %(asctime)s %(filename)s:%(lineno)s] %(message)s")
+        else:
+            self.formatter = ColoredFormatter
+            self.format_string = u"[{record.name}:{record.lineno}] {message}"
+
 
     @staticmethod
     def style_text(stylesheet, styles, base_styles, text):
@@ -128,17 +138,22 @@ class DifferentFormatter(object):
         return prefix + text + postfix
 
     def format(self, record):
-        shortname = record.name
-        if shortname.startswith("phial."):
-            shortname = shortname[len("phial"):]
-
         formatter = self.formatter(
             lambda arg: self.style_text(self.stylesheet, ["argument"], [record.levelname.lower()],
                                         arg))
         message = formatter.format(record.msg, *record.args)
 
-        formatted = u"[{record.name}:{record.lineno}] {message}".format(record=record,
-                                                                        message=message)
+        # TODO(brownhead): Make this configurable
+        simple_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created))
+        asctime = "%s,%03d" % (simple_time, record.msecs)
+
+        if self.percent_mode:
+            formatted = self.format_string % dict(message=message, asctime=asctime,
+                                                  **record.__dict__)
+        else:
+            formatted = self.format_string.format(record=record, message=message,
+                                                  asctime=asctime)
+
         formatted = self.style_text(self.stylesheet, [record.levelname.lower()], [], formatted)
 
         tb = self.format_traceback(record)

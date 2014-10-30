@@ -6,7 +6,7 @@ def setup_logging():
     logger.setLevel(logging.DEBUG)
 
     handler = logging.StreamHandler()
-    handler.setFormatter(dlogger.DifferentFormatter())
+    handler.setFormatter(dlogger.DifferentFormatter(percent_mode=True))
     logger.addHandler(handler)
 
     return logger
