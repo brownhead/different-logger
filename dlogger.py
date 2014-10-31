@@ -101,12 +101,12 @@ class SSSRule(object):
     """
 
     # Matches an SSS selector that looks at class names (ex: "timestamp.timestamp-date")
-    CLASS_NAMES_RE = re.compile(r"^([a-zA-Z_-]+)(\.[a-zA-Z_-]+)*$")
+    CLASS_NAMES_RE = re.compile(r"^\*|([a-zA-Z_-]+)(\.[a-zA-Z_-]+)*$")
 
     # Matches (and extracts information from) an SSS selector that looks at record attributes (ex:
     # levelname(INFO)).
     ATTRIBUTE_VALUE_RE = re.compile(
-        r"^~(?P<attribute_name>[a-zA-Z_-]+)\((?P<attribute_value>[a-zA-Z0-9_-]+)\)$")
+        r"^~(?P<attribute_name>[a-zA-Z_-]+)\((?P<attribute_value>[a-zA-Z0-9_.-]+)\)$")
 
     def __init__(self, selector, styles):
         self.selector = selector
@@ -120,7 +120,8 @@ class SSSRule(object):
         conditions = self.selector.split(":")
         for condition in conditions:
             if self.CLASS_NAMES_RE.match(condition):
-                if not set(condition.split(".")).intersection(set(element.class_names)):
+                if (condition != "*" and
+                        not set(condition.split(".")).intersection(set(element.class_names))):
                     return False
             elif self.ATTRIBUTE_VALUE_RE.match(condition):
                 match = self.ATTRIBUTE_VALUE_RE.match(condition)
@@ -284,7 +285,19 @@ def percent_format_text_elements(format_string, args, parent, literal_class_name
 class DifferentFormatter(object):
     DEFAULT_RULES = [SSSRule.from_line(i) for i in """
         levelname:~levelname(INFO) = blue
+        levelname:~levelname(WARNING) = yellow
+        levelname:~levelname(ERROR) = red
+        levelname:~levelname(CRITICAL) = red underline
+        line:~levelname(DEBUG) = faint
         asctime = faint
+        filename = green @no-reset
+        lineno = green @no-reset
+        traceback-lineno = blue
+        traceback-indent = faint
+        traceback-path = blue
+        traceback-func = blue
+        traceback-header = red
+        message-field = bright-blue
     """.split("\n") if i.strip()]
 
     def __init__(self, format_string=None, rules=None, no_default_rules=False):
@@ -304,7 +317,7 @@ class DifferentFormatter(object):
 
         # Make sure there's a value for message so that it can get properly replaced
         record.message = ""
-        template_root = TextElement(None, ["line"], [])
+        template_root = TextElement(None, ["top-line", "line"], [])
         template_root.children = percent_format_text_elements(
             self.format_string, record.__dict__, template_root, ["literal", "template-literal"],
             ["field", "template-field"])
@@ -315,11 +328,18 @@ class DifferentFormatter(object):
                     record.msg, record.args, i, ["literal", "message-literal"],
                     ["field", "message-field"])
 
-        # tb = self.format_traceback(record)
-        # if tb:
-        #     formatted += u"\n" + tb
+        # This will set the template root's parent correctly
+        log_root = TextElement(None, ["log"], [template_root])
 
-        return render_text_element(template_root, record, self.rules)
+        traceback_root = None
+        if record.exc_info:
+            log_root.children.append(TextElement(log_root, ["literal"], "\n"))
+            log_root.children.append(TextElement(
+                log_root, ["traceback"], self.prepare_tb_text_elements(record.exc_info)))
+        
+        formatted = render_text_element(log_root, record, self.rules)
+
+        return formatted
 
     @staticmethod
     def indent_text(text):
@@ -330,49 +350,54 @@ class DifferentFormatter(object):
 
         return "\n".join(processed)
 
-    def format_traceback(self, record):
-        if not record.exc_info:
-            return None
+    # Matches a file or footer line. We can't just trivially join the two regexes together
+    # because we need this one to have exactly one capturing group.
+    TB_SIMPLE_FILE_LINE_RE = re.compile(r'(^  File ".+", line [0-9]+, in .*$)', re.MULTILINE)
+    TB_FILE_LINE_RE = re.compile(r'^  File (".+"), line ([0-9]+), in (.*)$')
 
+    def prepare_tb_text_elements(self, exc_info):
+        # Create the actual traceback text
         dummy_file = StringIO.StringIO()
-        traceback.print_exception(record.exc_info[0], record.exc_info[1], record.exc_info[2],
+        traceback.print_exception(exc_info[0], exc_info[1], exc_info[2],
                                   file=dummy_file)
-        tb = dummy_file.getvalue().strip()
+        tb_lines = dummy_file.getvalue().strip().split("\n")
 
-        classnames = [record.levelname.lower()]
-        if getattr(record, "exc_ignored", False):
-            classnames.append("ignored_tb")
+        # We want the whole traceback to be indented a bit with an ellipsis, so we just stick a
+        # copy of this element everywhere
+        indentation_element = TextElement(None, ["literal", "traceback-indent"], "... ")
 
-        tb = self.highlight_tb(tb, classnames)
+        # Put the header in first
+        result = [indentation_element, TextElement(None, ["traceback-header"], tb_lines[0] + "\n")]
 
-        tb = self.indent_text(tb)
+        # Go through every line between the footer and the header and try to pull out the lines of
+        # code.
+        for index, text in enumerate(self.TB_SIMPLE_FILE_LINE_RE.split("\n".join(tb_lines[1:-1]))):
+            if not text: continue
 
-        return self.style_text(self.stylesheet, classnames, [], tb)
+            if index % 2 == 0:
+                result += [
+                    indentation_element,
+                    TextElement(None, ["traceback-code"], "    " + text.strip() + "\n")]
+                continue
 
-    def highlight_tb(self, tb, base_classnames):
-        FILE_LINE_RE = re.compile(r'^  File (".+"), line ([0-9]+), in (.*)$',
-                                  re.MULTILINE | re.UNICODE)
-        def repl_file_line(match):
-            return '  File {0}, line {1}, in {2}'.format(
-                self.style_text(self.stylesheet, ["tb_path"], base_classnames, match.group(1)),
-                self.style_text(self.stylesheet, ["tb_lineno"], base_classnames, match.group(2)),
-                match.group(3)
-            )
+            file_line_match = self.TB_FILE_LINE_RE.match(text)
+            assert file_line_match
+            file_line_element = TextElement(
+                None, ["traceback-line", "traceback-file-line"], [])
+            file_line_element.children = percent_format_text_elements(
+                "  File %(traceback-path)s, line %(traceback-lineno)s, in %(traceback-func)s\n",
+                {
+                    "traceback-path": file_line_match.group(1),
+                    "traceback-lineno": file_line_match.group(2),
+                    "traceback-func": file_line_match.group(3),
+                },
+                file_line_element, ["traceback-literal"], ["traceback-field"])
+            result += [indentation_element, file_line_element]
 
-        FOOTER_LINE_RE = re.compile(r"^(\w+)(.*)$", re.MULTILINE | re.UNICODE)
-        def repl_footer_line(match):
-            return self.style_text(self.stylesheet, ["tb_exc_name"], base_classnames, 
-                                   match.group(1)) + match.group(2)
+        result += [
+            indentation_element, TextElement(None, ["traceback-footer"], tb_lines[-1])]
 
-        lines = tb.split("\n")
-        if len(lines) < 2:
-            return tb
-        lines[-1] = FOOTER_LINE_RE.sub(repl_footer_line, lines[-1])
-        tb = "\n".join(lines)
-
-        tb = FILE_LINE_RE.sub(repl_file_line, tb)
-
-        return tb
+        return result
 
 
 class FatalError(SystemExit, Exception):
