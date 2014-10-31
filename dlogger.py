@@ -7,160 +7,319 @@ import string
 import re
 import time
 
-class ColoredFormatter(string.Formatter):
-    """Same as string.Formatter but ensures all replacements are colored.
 
-    This also backports the zero-length field feature of Python 2.7 to Python
-    2.6, so "Hello {} world!" will always be a valid format string.
+ANSI_ESCAPE_CODES = {
+    "reset": 0,
+    "bold": 1,
+    "faint": 2,
+    "italic": 3,
+    "underline": 4,
+    "blink-slow": 5,
+    "blink-fast": 6,
+    "inverse": 7,
+    "conceal": 8,
+    "strike-through": 9,
+    "font-default": 10,
+    "font-1": 11,
+    "font-2": 12,
+    "font-3": 13,
+    "font-4": 14,
+    "font-5": 15,
+    "font-6": 16,
+    "font-7": 17,
+    "font-8": 18,
+    "font-9": 19,
+    "fraktur": 20,
+    "normal-intensity": 22,
+    "no-italic": 23,
+    "no-underline": 24,
+    "no-blink": 25,
+    "no-inverse": 27,
+    "no-conceal": 28,
+    "no-strike-through": 29,
+    "black": 30,
+    "red": 31,
+    "green": 32,
+    "yellow": 33,
+    "blue": 34,
+    "magenta": 35,
+    "cyan": 36,
+    "white": 37,
+    "color-default": 39,
+    "background-black": 40,
+    "background-red": 41,
+    "background-green": 42,
+    "background-yellow": 43,
+    "background-blue": 44,
+    "background-magenta": 45,
+    "background-cyan": 46,
+    "background-white": 47,
+    "background-default": 49,
+    "frame": 51,
+    "encircle": 52,
+    "overline": 53,
+    "no-frame": 54,
+    "no-overline": 55,
+    "bright-black": 90,
+    "bright-red": 91,
+    "bright-green": 92,
+    "bright-yellow": 93,
+    "bright-blue": 94,
+    "bright-magenta": 95,
+    "bright-cyan": 96,
+    "bright-white": 97,
+    "background-bright-black": 100,
+    "background-bright-red": 101,
+    "background-bright-green": 102,
+    "background-bright-yellow": 103,
+    "background-bright-blue": 104,
+    "background-bright-magenta": 105,
+    "background-bright-cyan": 106,
+    "background-bright-white": 107,
+}
 
-    All replacements are sent through whatever function you provide as the
-    `colorizer`. So if you formatted the string "Hello {} world!" with the
-    value 2, and `colorizer` was set to a function that always returned the
-    string "walnut", the result would be "Hello walnut world!".
+
+def ansify(codes):
+    """Returns an ANSI escape sequence for coloring text.
+
+    Given some codes (say, from the list at http://en.wikipedia.org/wiki/ANSI_escape_code), this
+    function will return a string you can print to the terminal that will apply the given styles to
+    any following text.
+
+    Ex:
+
+        print ansify(31), "this text is red", ansify(0), "not anymore!"
+    """
+    return u"\x1B[" + u";".join(map(str, codes)) + u"m"
+
+
+class SSSRule(object):
+    """Represents a Shitty Stylesheet rule.
+
+    Feel free to make your own type of rules. Duck typing is at play here, so just make sure you
+    have functions that look like should_apply and get_prefix.
     """
 
-    # Matches zero length fields (fields with no name, ie: {})
-    ZERO_LENGTH_RE = re.compile(r"(?P<open_braces>{+)}")
+    # Matches an SSS selector that looks at class names (ex: "timestamp.timestamp-date")
+    CLASS_NAMES_RE = re.compile(r"^([a-zA-Z_-]+)(\.[a-zA-Z_-]+)*$")
 
-    def __init__(self, colorizer):
-        self.colorizer = colorizer
+    # Matches (and extracts information from) an SSS selector that looks at record attributes (ex:
+    # levelname(INFO)).
+    ATTRIBUTE_VALUE_RE = re.compile(
+        r"^~(?P<attribute_name>[a-zA-Z_-]+)\((?P<attribute_value>[a-zA-Z0-9_-]+)\)$")
 
-    def convert_field(self, value, conversion):
-        """Does any conversion required to render the field.
+    def __init__(self, selector, styles):
+        self.selector = selector
+        self.styles = styles
 
-        This function is called to figure out what to replace a field with. For
-        example, if the formatter is replacing {0} with 2, it will call this
-        function with value set to 2, and conversion set to None, and will
-        replace {0} with whatever we return. If the formatter is replacing
-        {0!s} instead, conversion will be "s".
+    def should_apply(self, element, record):
+        """Returns True this rule applies to the current element.
+
+        `record` should be a logging.LogRecord object. `element` should be a TextElement.
         """
-        converted = string.Formatter.convert_field(self, value, conversion)
-        return self.colorizer(converted)
+        conditions = self.selector.split(":")
+        for condition in conditions:
+            if self.CLASS_NAMES_RE.match(condition):
+                if not set(condition.split(".")).intersection(set(element.class_names)):
+                    return False
+            elif self.ATTRIBUTE_VALUE_RE.match(condition):
+                match = self.ATTRIBUTE_VALUE_RE.match(condition)
 
-    def parse(self, format_string):
-        """Parses the format string into a useful iterable.
+                if match.group("attribute_name") not in record.__dict__:
+                    return False
 
-        The actual behavior of this function isn't super important. What's
-        important is that it's called in order to parse the format string, so
-        if we want to change the format string this is the time to do it. Here
-        is where we take care of zero length strings.
-        """
-        # Scope hack to make a variable modifiable inside the below
-        # function.
-        count = [0]
-
-        def repl(match):
-            # If there is an odd number of open braces, then we know this is a
-            # zero-length field. This is necessary because the way to escape an
-            # open brace is by preceding it with an open brace. So {{{{}} does
-            # not contain a zero length field and is instead rendered as two
-            # open braces followed by a closing brace.
-            if len(match.group("open_braces")) % 2 == 1:
-                r = match.group("open_braces") + str(count[0]) + "}"
-                count[0] += 1
-                return r
+                real_value = record.__dict__[match.group("attribute_name")]
+                desired_value = type(real_value)(match.group("attribute_value"))
+                if real_value != desired_value:
+                    return False
             else:
-                return match.group(0)
+                raise ValueError("Invalid condition {!r}.".format(condition))
 
-        # Replace any zero length field with a numbered field as appropriate
-        # than pass it off to the parser.
-        converted = self.ZERO_LENGTH_RE.sub(repl, format_string)
-        return string.Formatter.parse(self, converted)
+        return True
+
+    def get_prefix(self):
+        """Returns the text to prefix the selected text with.
+
+        This should return an ANSI escape sequence like one returned by ansify. This rule is not
+        enforced however so feel free to return anything you please if you're up to no good.
+        """
+        # Make a copy so we can mutate it
+        styles = self.styles[:]
+
+        # This will contain a list of ANSI control codes that will make up our final prefix
+        codes = []
+
+        # The reset style is always added by default, unless @no-reset is present
+        no_reset = "@no-reset" in styles
+        if no_reset:
+            styles.remove("@no-reset")
+        else:
+            codes.append(0)
+
+        # Convert the styles into actual codes
+        for i in styles:
+            codes.append(ANSI_ESCAPE_CODES[i])
+
+        # Form up the sequence of codes into something the terminal will (hopefully) parse and
+        # understand.
+        return ansify(codes)
+
+    @classmethod
+    def from_line(cls, line):
+        """Parses a line of SSS.
+
+        A line of SSS looks like
+
+            SELECTOR = STYLE [STYLE...]
+
+        For example:
+
+            timestamp.timestamp-date = blue bold
+        """
+        selector, styles_raw = line.split("=")
+        styles = styles_raw.split()
+        return cls(selector.strip(), styles)
 
 
-class ColoredPercentFormatter(object):
-    """Same as ColoredFormatter but accepts percent style strings.
+class TextElement(object):
+    """Represents a stylable piece of text.
 
-    Example of a percent style string: "George is a %s bear."
+    Log messages are broken up into TextElements before being rendered. It is a simple tree
+    structure.
     """
 
-    # This is a regular expression that should only capture valid fields in a
-    # percent style string.
-    FIELD_RE = re.compile(
-        r"%"
-        r"(\((?P<mapping_key>[^)]+)\))?"
-        r"(?P<conversion_flags>[#0 +-]+)?"
-        r"(?P<minimum_field_width>[0-9*]+)?"
-        r"(?P<precision>\.[0-9*]+)?"
-        r"(?P<length_modifier>[hlL])?"
-        r"(?P<conversion_type>[diouxXeEfFgGcrs%])")
+    def __init__(self, parent, class_names, children):
+        self.parent = parent
+        self.class_names = class_names
+        self.children = children
+        if not isinstance(self.children, basestring):
+            for i in self.children:
+                i.parent = self
 
-    def __init__(self, colorizer):
-        self.colorizer = colorizer
+    def __repr__(self):
+        return "{}({!r}, {!r}, {!r})".format(
+            type(self).__name__,
+            self.parent,
+            self.class_names,
+            self.children)
 
-    def _colorize_match(self, match):
-        if match.group("conversion_type") == "%":
-            return match.group(0)
+
+def render_text_element(element, record, rules, postfix=ansify([0])):
+    """A recursive function that returns styled text from a TextElement.
+
+    Pass it a TextElement, and a list of rules, and watch the colored text flow!
+    """
+    assert isinstance(element, TextElement)
+
+    prefix = []
+    for rule in rules:
+        if rule.should_apply(element, record):
+            prefix.append(rule.get_prefix())
+    prefix = "".join(prefix)
+
+    if isinstance(element.children, basestring):
+        text = element.children
+    else:
+        parts = []
+        for child in element.children:
+            parts.append(render_text_element(child, record, rules, prefix or postfix))
+        text = u"".join(parts)
+
+    return prefix + text + postfix
+
+
+# This is a regular expression that should only capture valid fields in a percent style string.
+SIMPLE_FIELD_RE = re.compile(
+    r"(%"
+    r"(?:\((?:[^)]+)\))?"
+    r"(?:[#0 +-]+)?"
+    r"(?:[0-9*]+)?"
+    r"(?:\.[0-9*]+)?"
+    r"(?:[hlL])?"
+    r"(?:[diouxXeEfFgGcrs%]))")
+
+
+FIELD_RE = re.compile(
+    r"%"
+    r"(\((?P<mapping_key>[^)]+)\))?"
+    r"(?P<conversion_flags>[#0 +-]+)?"
+    r"(?P<minimum_field_width>[0-9*]+)?"
+    r"(?P<precision>\.[0-9*]+)?"
+    r"(?P<length_modifier>[hlL])?"
+    r"(?P<conversion_type>[diouxXeEfFgGcrs%])")
+
+
+def percent_format_text_elements(format_string, args, parent, literal_class_names,
+                                 field_class_names):
+    """Does a percent style replacement (text % args) but properly forms TextElements.
+    """
+    result = []
+    for index, text in enumerate(SIMPLE_FIELD_RE.split(format_string)):
+        if not text: continue
+
+        # Even indexed items returned from split will always be non-matches (they don't match the
+        # regular expression) so we know that evenly indexed items are literals and odd indexed
+        # items are fields.
+        if index % 2 == 0:
+            result.append(TextElement(parent, literal_class_names, text))
         else:
-            return self.colorizer(match.group(0))
+            # This is a hacky and awkward way to handle positional arguments vs keyword ones
+            # (when args is a tuple we're in positional mode, otherwise in keyword mode).
+            if isinstance(args, tuple):
+                # This'll grab the correct positional argument. We do a % format here instead of
+                # just swapping it in to allow for format stuff to apply (ex: %-8s).
+                replaced = text % (args[index / 2], )
+                class_names = field_class_names
+            else:
+                # Any unused keyword arugments in the dictionary are ignored so we don't have to
+                # do anything to args (unlike above).
+                replaced = text % args
+                class_names = field_class_names + [FIELD_RE.match(text).group("mapping_key")]
 
-    def format(self, format_string, *args, **kwargs):
-        return self.FIELD_RE.sub(self._colorize_match, format_string) % (args or kwargs)
+            result.append(TextElement(parent, class_names, replaced))
+
+    return result
 
 
 class DifferentFormatter(object):
-    DEFAULT_STYLESHEET = {
-        "default": [],
-        "critical": [1, 31],  # bold red
-        "error": [31],  # red
-        "warning": [33],  # yellow
-        "info": [],  # default
-        "debug": [2],  # faint
-        "argument": [34],  # blue
-        "ignored_tb": [2],  # faint
-        "tb_path": [34],  # blue
-        "tb_lineno": [34],  # blue
-        "tb_exc_name": [31],  # red
-    }
+    DEFAULT_RULES = [SSSRule.from_line(i) for i in """
+        levelname:~levelname(INFO) = blue
+        asctime = faint
+    """.split("\n") if i.strip()]
 
-    def __init__(self, format_string=None, stylesheet=None, percent_mode=False):
-        self.stylesheet = self.DEFAULT_STYLESHEET.copy()
-        if stylesheet is not None:
-            self.stylesheet.update(stylesheet)
+    def __init__(self, format_string=None, rules=None, no_default_rules=False):
+        self.format_string = (format_string or
+            u"%(levelname)-8s %(asctime)s %(filename)s:%(lineno)s] %(message)s")
 
-        self.percent_mode = percent_mode
-        if self.percent_mode:
-            self.formatter = ColoredPercentFormatter
-            self.format_string = (
-                u"%(levelname)-8s %(asctime)s %(filename)s:%(lineno)s] %(message)s")
-        else:
-            self.formatter = ColoredFormatter
-            self.format_string = u"[{record.name}:{record.lineno}] {message}"
-
-
-    @staticmethod
-    def style_text(stylesheet, styles, base_styles, text):
-        # Form up the sequences we'll use to color the text.
-        ansify = lambda codes: u"\x1B[" + u";".join(map(str, [0] + codes)) + u"m"
-        prefix = ansify(sum([stylesheet[i] for i in base_styles + styles], []))
-        postfix = ansify(sum([stylesheet[i] for i in base_styles], []))
-
-        return prefix + text + postfix
+        self.rules = []
+        if not no_default_rules:
+            self.rules += self.DEFAULT_RULES
+        if rules is not None:
+            self.rules += rules
 
     def format(self, record):
-        formatter = self.formatter(
-            lambda arg: self.style_text(self.stylesheet, ["argument"], [record.levelname.lower()],
-                                        arg))
-        message = formatter.format(record.msg, *record.args)
-
         # TODO(brownhead): Make this configurable
         simple_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created))
-        asctime = "%s,%03d" % (simple_time, record.msecs)
+        record.asctime = "%s,%03d" % (simple_time, record.msecs)
 
-        if self.percent_mode:
-            formatted = self.format_string % dict(message=message, asctime=asctime,
-                                                  **record.__dict__)
-        else:
-            formatted = self.format_string.format(record=record, message=message,
-                                                  asctime=asctime)
+        # Make sure there's a value for message so that it can get properly replaced
+        record.message = ""
+        template_root = TextElement(None, ["line"], [])
+        template_root.children = percent_format_text_elements(
+            self.format_string, record.__dict__, template_root, ["literal", "template-literal"],
+            ["field", "template-field"])
 
-        formatted = self.style_text(self.stylesheet, [record.levelname.lower()], [], formatted)
+        for i in template_root.children:
+            if "message" in i.class_names:
+                i.children = percent_format_text_elements(
+                    record.msg, record.args, i, ["literal", "message-literal"],
+                    ["field", "message-field"])
 
-        tb = self.format_traceback(record)
-        if tb:
-            formatted += u"\n" + tb
+        # tb = self.format_traceback(record)
+        # if tb:
+        #     formatted += u"\n" + tb
 
-        return formatted
+        return render_text_element(template_root, record, self.rules)
 
     @staticmethod
     def indent_text(text):

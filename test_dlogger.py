@@ -1,12 +1,26 @@
 import logging
 import dlogger
 
+stylesheet = {
+    "default": [],
+    "critical": [1, 31],  # bold red
+    "error": [31],  # red
+    "warning": [33],  # yellow
+    "info": [],  # default
+    "debug": [2],  # faint
+    "argument": [34],  # blue
+    "ignored_tb": [2],  # faint
+    "tb_path": [34],  # blue
+    "tb_lineno": [34],  # blue
+    "tb_exc_name": [31],  # red
+}
+
 def setup_logging():
     logger = logging.getLogger("test_dlogger")
     logger.setLevel(logging.DEBUG)
 
     handler = logging.StreamHandler()
-    handler.setFormatter(dlogger.DifferentFormatter(percent_mode=True))
+    handler.setFormatter(dlogger.DifferentFormatter())
     logger.addHandler(handler)
 
     return logger
