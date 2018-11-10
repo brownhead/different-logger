@@ -7,90 +7,19 @@ import string
 import re
 import time
 
-
-ANSI_ESCAPE_CODES = {
-    "reset": 0,
-    "bold": 1,
-    "faint": 2,
-    "italic": 3,
-    "underline": 4,
-    "blink-slow": 5,
-    "blink-fast": 6,
-    "inverse": 7,
-    "conceal": 8,
-    "strike-through": 9,
-    "font-default": 10,
-    "font-1": 11,
-    "font-2": 12,
-    "font-3": 13,
-    "font-4": 14,
-    "font-5": 15,
-    "font-6": 16,
-    "font-7": 17,
-    "font-8": 18,
-    "font-9": 19,
-    "fraktur": 20,
-    "normal-intensity": 22,
-    "no-italic": 23,
-    "no-underline": 24,
-    "no-blink": 25,
-    "no-inverse": 27,
-    "no-conceal": 28,
-    "no-strike-through": 29,
-    "black": 30,
-    "red": 31,
-    "green": 32,
-    "yellow": 33,
-    "blue": 34,
-    "magenta": 35,
-    "cyan": 36,
-    "white": 37,
-    "color-default": 39,
-    "background-black": 40,
-    "background-red": 41,
-    "background-green": 42,
-    "background-yellow": 43,
-    "background-blue": 44,
-    "background-magenta": 45,
-    "background-cyan": 46,
-    "background-white": 47,
-    "background-default": 49,
-    "frame": 51,
-    "encircle": 52,
-    "overline": 53,
-    "no-frame": 54,
-    "no-overline": 55,
-    "bright-black": 90,
-    "bright-red": 91,
-    "bright-green": 92,
-    "bright-yellow": 93,
-    "bright-blue": 94,
-    "bright-magenta": 95,
-    "bright-cyan": 96,
-    "bright-white": 97,
-    "background-bright-black": 100,
-    "background-bright-red": 101,
-    "background-bright-green": 102,
-    "background-bright-yellow": 103,
-    "background-bright-blue": 104,
-    "background-bright-magenta": 105,
-    "background-bright-cyan": 106,
-    "background-bright-white": 107,
-}
+from . import _ansify
 
 
-def ansify(codes):
-    """Returns an ANSI escape sequence for coloring text.
+def _predicate_split(lst, predicate):
+    truthy = []
+    falsy = []
+    for i in lst:
+        if predicate(i):
+            truthy.append(i)
+        else:
+            falsy.append(i)
 
-    Given some codes (say, from the list at http://en.wikipedia.org/wiki/ANSI_escape_code), this
-    function will return a string you can print to the terminal that will apply the given styles to
-    any following text.
-
-    Ex:
-
-        print ansify(31), "this text is red", ansify(0), "not anymore!"
-    """
-    return u"\x1B[" + u";".join(map(str, codes)) + u"m"
+    return truthy, falsy
 
 
 class SSSRule(object):
@@ -99,6 +28,8 @@ class SSSRule(object):
     Feel free to make your own type of rules. Duck typing is at play here, so just make sure you
     have functions that look like should_apply and get_prefix.
     """
+
+    LEGAL_STYLES = set(_ansify.ANSI_ESCAPE_CODES.iterkeys()) | {"@no-reset"}
 
     # Matches an SSS selector that looks at class names (ex: "timestamp.timestamp-date")
     CLASS_NAMES_RE = re.compile(r"^\*|([a-zA-Z_-]+)(\.[a-zA-Z_-]+)*$")
@@ -112,10 +43,17 @@ class SSSRule(object):
         self.selector = selector
         self.styles = styles
 
+        illegal_styles = set(self.styles) - self.LEGAL_STYLES
+        if illegal_styles:
+            raise ValueError(
+                "Unknown styles found for selector %r: %r" % (
+                    self.selector, illegal_styles))
+
     def should_apply(self, element, record):
         """Returns True this rule applies to the current element.
 
-        `record` should be a logging.LogRecord object. `element` should be a TextElement.
+        `record` should be a logging.LogRecord object. `element` should be a
+        TextElement.
         """
         conditions = self.selector.split(":")
         for condition in conditions:
@@ -141,29 +79,16 @@ class SSSRule(object):
     def get_prefix(self):
         """Returns the text to prefix the selected text with.
 
-        This should return an ANSI escape sequence like one returned by ansify. This rule is not
-        enforced however so feel free to return anything you please if you're up to no good.
+        This should return an ANSI escape sequence like one returned by ansify.
         """
-        # Make a copy so we can mutate it
-        styles = self.styles[:]
+        # Pull out any @no-reset directive
+        code_names, directives = _predicate_split(
+            self.styles, lambda i: not i.startswith("@"))
 
-        # This will contain a list of ANSI control codes that will make up our final prefix
-        codes = []
+        if "@no-reset" not in directives:
+            code_names.insert(0, "reset")
 
-        # The reset style is always added by default, unless @no-reset is present
-        no_reset = "@no-reset" in styles
-        if no_reset:
-            styles.remove("@no-reset")
-        else:
-            codes.append(0)
-
-        # Convert the styles into actual codes
-        for i in styles:
-            codes.append(ANSI_ESCAPE_CODES[i])
-
-        # Form up the sequence of codes into something the terminal will (hopefully) parse and
-        # understand.
-        return ansify(codes)
+        return _ansify.ansify(code_names)
 
     @classmethod
     def from_line(cls, line):
@@ -205,7 +130,7 @@ class TextElement(object):
             self.children)
 
 
-def render_text_element(element, record, rules, postfix=ansify([0])):
+def render_text_element(element, record, rules, postfix=_ansify.ansify(["reset"])):
     """A recursive function that returns styled text from a TextElement.
 
     Pass it a TextElement, and a list of rules, and watch the colored text flow!
