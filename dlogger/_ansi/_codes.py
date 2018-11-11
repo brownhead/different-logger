@@ -1,4 +1,4 @@
-ANSI_ESCAPE_CODES = {
+_NAMES_TO_VALUES = {
     "reset": 0,
     "bold": 1,
     "faint": 2,
@@ -69,17 +69,20 @@ ANSI_ESCAPE_CODES = {
 }
 
 
-def ansify(code_names):
+CODES = frozenset(_NAMES_TO_VALUES.iterkeys())
+
+
+def names_to_sequence(code_names):
     """Returns an ANSI escape sequence for coloring text.
 
-    Given some code_names (see ANSI_ESCAPE_CODES) this function will return a
+    Given some code_names (see CODES) this function will return a
     string you can print to the terminal that will apply the given styles to
     any following text.
 
     Ex:
 
-        print ansify(["red"]), "this text is red", ansify(["reset"]), \\
-              "not anymore!"
+        print names_to_sequence(["red"]), "this text is red", \\
+              names_to_sequence(["reset"]), "not anymore!"
     """
-    codes = (str(ANSI_ESCAPE_CODES[code_name]) for code_name in code_names)
-    return u"\x1B[" + u";".join(codes) + u"m"
+    codes = (str(_NAMES_TO_VALUES[code_name]) for code_name in code_names)
+    return "\x1B[" + ";".join(codes) + "m"

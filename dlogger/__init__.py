@@ -7,7 +7,7 @@ import string
 import re
 import time
 
-from . import _ansify
+from _ansi._codes import names_to_sequence
 
 
 def _predicate_split(lst, predicate):
