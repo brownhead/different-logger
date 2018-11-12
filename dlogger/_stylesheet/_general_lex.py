@@ -1,9 +1,6 @@
 import re
 
-
-class LexingError(RuntimeError):
-    def __init__(self, *args):
-        return super(LexingError, self).__init__(*args)
+import _error
 
 
 def simple_lex_once(text, token_matchers):
@@ -23,7 +20,7 @@ def simple_lex_once(text, token_matchers):
             pending_tokens.append(match)
 
     if len(pending_tokens) >= 2:
-        raise ValueError(
+        raise LexingError(
             "Two matchers matched the same input text, this means the lexer's "
             "language specification is faulty. You should file a bug with "
             "this package's maintainer.")
@@ -66,20 +63,11 @@ def simple_lex(text, spec, start_state, end_state):
         matchers = [matcher for matcher, next_state in spec[state]]
         token, remaining = simple_lex_once(remaining, matchers)
         if token is None:
-            processed_text = text[:len(text) - len(remaining)]
-            line_number = processed_text.count("\n")
-
-            processed_line = processed_text[processed_text.rindex("\n"):]
-            column_number = len(processed_line)
-
-            snapshot = processed_line
-            if len(snapshot) > 15:
-                snapshot = snapshot[-15:] + "..."
-
-            raise LexingError(
-                "Error during lexing. Could not find \"%s\" on line %d, column"
-                " %d (after %r)." % (
-                    state, line_number, column_number, snapshot))
+            position = len(text) - len(remaining)
+            raise _error.ParseError.from_position(
+                text,
+                position,
+                "expected to find \"%s\"." % state)
 
         state = next(
             next_state

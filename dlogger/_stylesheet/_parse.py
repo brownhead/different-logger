@@ -2,6 +2,7 @@ import re
 import sys
 
 import _lex
+import _error
 from ..easy_repr import easy_repr
 
 
@@ -11,14 +12,17 @@ class StylesheetRule(object):
             self.attribute_name = attribute_name
 
             self.operator = operator
-            if self.operator not in ["~=", "="]:
-                raise RuntimeError(
-                    "Attribute condition operator must be ~= or =.")
+            assert self.operator in ["~=", "="]
 
-            if self.operator == "~=":
-                self.value = re.compile(value, re.UNICODE)
-            else:
-                self.value = value
+            if re.match("^[0-9]+$", value):
+                if self.operator != "=":
+                    raise ValueError(
+                        "Operator must be '=' if value is numeric.")
+                self.value = int(value)
+            elif self.operator == "~=":
+                self.value = re.compile(value[1:-1], re.UNICODE)
+            else:  # operator == "="
+                self.value = value[1:-1]
 
         def __repr__(self):
             return easy_repr(self)
@@ -43,33 +47,6 @@ def _parse_into_lines(text):
     return [line for line in lines if line]
 
 
-class ParsingError(RuntimeError):
-    def __init__(self, msg, cause=None):
-        super(ParsingError, self).__init__(msg)
-
-        self.cause = cause
-
-    @classmethod
-    def from_position(cls, text, position, msg, cause=None):
-        prior_text = text[:position]
-        line_number = prior_text.count("\n")
-
-        try:
-            prior_newline = prior_text.rindex("\n")
-        except ValueError:
-            prior_newline = 0
-
-        line_with_error = text[prior_newline:]
-        column_number = position - prior_newline
-
-        around = text[position - 7: position + 7]
-
-        return cls(
-            "Parsing error on line %d, column %d (around %s): %s" % (
-                line_number, column_number, around, msg),
-            cause)
-
-
 def parse(text):
     lines = _parse_into_lines(text)
 
@@ -89,12 +66,11 @@ def parse(text):
                     attribute_name=token.match.group("name"),
                     operator=token.match.group("operator"),
                     value=token.match.group("value"))
-            except Exception as err:
-                raise ParsingError.from_position(
+            except Exception:
+                ParsingError.raise_with_cause(
                     text,
                     token.match.start(0),
-                    err.message,
-                    err), None, sys.exc_info()[2]
+                    err.message)
 
             attribute_conditions.append(attribute_condition)
 
